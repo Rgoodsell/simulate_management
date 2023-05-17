@@ -13,15 +13,15 @@ unpack_parList <- function(parList){
       # Constant variables
       dens_t1         = factor(1:5),
       
-      crop_t1        = parList$rotation[i],
-      crop_t2        = parList$rotation[i+1],
+      crop_t1        = parList$cropping[i],
+      crop_t2        = parList$cropping[i+1],
+      rotation       = parList$rotation[i],
       
       
       cult_cat_t2     = parList$cultivation[i],
       soil_group_t1   = parList$soil_group[i],
       
       spray_days_gw_t2 = parList$spray_days[i+1],
-      # n_prod_gw_t2      = parList$n_products[i+1],
       a_gly_t2        = parList$n_glyphosate[i+1],
       
       d_season_t2     = parList$d_season[i+1],
@@ -161,23 +161,34 @@ simulate_strategy <- function(parList  , impRes , impData ,  thin){
   
   return(simList)
 }
-build_strategy    <- function(rotation = c("wheat_wheat" ,"wheat_wheat") , d_season = "winter",soil_group = "S5",cultivation = "conventional",spray_days = 0 , n_glyphosate = 0 , mean_mort = 100, c_diff = 0 , d_diff = 0, nstep = 3 , name){
+
+build_strategy    <- function(cropping     = c("wheat"),
+                              rotation     = c("wheat_wheat") , 
+                              d_season     = "winter" ,
+                              soil_group   = "S5" ,
+                              cultivation  = "conventional" ,
+                              spray_days   = 0 , 
+                              n_glyphosate = 0 , 
+                              mean_mort    = 100 , 
+                              c_diff       = 0 , 
+                              d_diff       = 0 ,
+                              nstep        = 3 , 
+                              name){
   list(
+    cropping     = cropping,
     rotation     = rotation,
     d_season     = d_season,
-    soil_group         = soil_group,
+    soil_group   = soil_group,
     cultivation  = cultivation,
-    spray_days        = spray_days,
-    n_glyphosate         = n_glyphosate ,
-    mean_mort = mean_mort,
+    spray_days   = spray_days,
+    n_glyphosate = n_glyphosate ,
+    mean_mort    = mean_mort,
     c_diff       = c_diff,
     d_diff       = d_diff ,
-    strategy         = name)
+    strategy     = name)
   
   
 }
-
-
 
 # functions using resimulted coefficients ---------------------------------
 
@@ -217,14 +228,14 @@ construct_Tf_rs      <- function(modList , Beta , parList){
     eta   <- sapply(1:5 , function(x) Beta %*% X[x,])  # Linear predictor for resim coefficients - row = coef vector , col = source state / new data
     
     
-    thetaL <- array(dim = c(nrow(eta) , 5,5))  # Array of transition probabilities , row = coef vector , col = destination state , slice = destination state
+    thetaL <- array(dim = c(nrow(eta) , 5,5))  # Array of transition probabilities , row = coef vector , col = destination state , slice = source state
     for(j in 1:5){
       theta <- matrix(0 , ncol = 5 , nrow = nrow(Beta))
-      theta[,1] <- 1- plogis(eta[,i] - cp[1]) 
+      theta[,1] <- 1- plogis(eta[,j] - cp[1]) 
       for(k in 2:4){
-        theta[,k] <- plogis(eta[,i] - cp[k-1]) - plogis(eta[,i] - cp[k])
+        theta[,k] <- plogis(eta[,j] - cp[k-1]) - plogis(eta[,j] - cp[k])
       }
-      theta[,5] <- plogis(eta[,i] - cp[4]) 
+      theta[,5] <- plogis(eta[,j] - cp[4]) 
       thetaL[,,j] <- theta
     }
     
@@ -262,12 +273,12 @@ project_sim_rs       <- function(projection_list , Nt){
   out   <- bind_rows(res_list , .id = "iter")  
   
 } # project entire simulation from starting state Nt 
-simulate_strategy_rs <- function(parList_comp  , impRes , betaList ,   thin , Nt){
+simulate_strategy_rs <- function(parList_comp  , impRes , impData ,  betaList ,   thin , Nt){
   simList <- list()
   
   for(i in seq_along(parList_comp)){
     print(noquote(paste("Simulating strategy" , i , " of " , length(parList_comp),"...")))
-    resList     <- odod(impRes , impData ,  thin)
+    resList     <- unpack_impMod(impRes = impRes, impData = impData ,  thin = thin)
     tf_matrices <- mapply(construct_Tf_rs , modList = resList , Beta = betaList , parList = list(parList_comp[[i]]) , SIMPLIFY = FALSE)
     simList[[i]]     <- lapply(tf_matrices ,project_sim_rs, Nt) %>%
       bind_rows(.id = "imp") %>%
