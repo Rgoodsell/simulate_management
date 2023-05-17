@@ -9,23 +9,18 @@ source("R/simulation_functions.R")
 
 # data --------------------------------------------------------------------
 
-my_data <- read_csv("data/management_data.csv") %>% clean_names() 
+# General tidying
+init_data <- readRDS("data/rotation_data_for_Rob_2022-09-28.rds") %>% clean_names() %>%
+             mutate(strategy = strategy_id_for_rob , 
+                    soil_group = soil_group_superseded) %>% 
+            mutate(crop = case_when(rotation_year == 0 & crop == "winter OSR" ~ "winter wheat" , TRUE ~ crop)) %>% 
+  filter(rotation_year>0)
+  
 
-old_soil <- read_csv("data/mgmtdata_strats.csv") %>% select(soil_group , strategy = scenario) %>% distinct()
-new_soil <- my_data %>% select(strategy ,s4:s8) %>% distinct()
-
-soil_lookup <- full_join(old_soil , new_soil) %>%
-                    select(-strategy) %>% distinct() %>% arrange(soil_group) %>% drop_na() %>% 
-                    mutate(iid = interaction(s4,s5,s7, s8)) %>% 
-                    select(-s4:-s8)
-                    
 
 # tidy --------------------------------------------------------------------
 
-
-tidy_data <-   my_data %>% 
-                mutate(iid = interaction(s4,s5,s7, s8)) %>% left_join(soil_lookup) %>% 
-                select(-s4:-s8 , iid) %>% 
+tidy_data <-   init_data %>% 
               mutate(d_season = case_when( str_detect(crop , "winter") ~ "winter" , 
                                            str_detect(crop , "spring") ~ "spring" , 
                 TRUE ~ NA_character_)) %>%
@@ -54,16 +49,39 @@ tidy_data <-   my_data %>%
                             d_season == "winter" ~ d_date - 273),
          c_diff = case_when(d_season == "spring" ~ c_date - 251, 
                             d_season == "winter" ~ c_date - 240),
-         mean_mort = case_when(initial_resistance  == "high" ~ 20 , 
-                               initial_resistance == "low"   ~ 90 , 
-                               is.na(initial_resistance) ~ 100)) %>% 
+         mean_mort = case_when(initial_resistance  == "HR" ~ 13 , 
+                               initial_resistance == "LR"   ~ 63 , 
+                               is.na(initial_resistance) ~ 90)) %>% 
   ungroup() %>% 
-  mutate(strategy_split = interaction(strategy , initial_bg_density)) %>% droplevels() 
+  mutate(strategy_split = interaction(strategy , initial_bg_density)) %>% droplevels() %>% 
+  group_by(strategy) %>%  mutate(fcs = paste(crop , collapse = "_")) %>% distinct() %>% ungroup()
+
+
+
+# replace missing coefficients
+tidy_data <- tidy_data %>%
+          group_by(strategy) %>%
+          mutate(rotation = paste0(lag(crop , default = "wheat")  , "_" , crop)) %>%
+          mutate(rotation = case_when(rotation == "fallow_osr"    ~ "fallow_wheat",
+                                      rotation == "osr_bar"       ~ "osr_wheat"   ,
+                                      rotation == "bar_osr"       ~ "bar_beans"   ,
+                                      rotation == "linseed_beans" ~ "linseed_bar" ,
+                                      rotation == "linseed_peas"  ~ "linseed_bar" ,
+                                      rotation == "beet_oats"     ~ "beet_wheat"  ,
+                                      rotation == "beat_oats"     ~ "beet_wheat"  ,
+                                      rotation == "peas_bar"      ~ "peas_wheat"  ,
+                                      rotation == "bar_peas"      ~ "bar_beans"   ,
+                                      TRUE ~ rotation))
 
 
 # Split 
-sList <- split(tidy_data , tidy_data$strategy_split)
+sList    <- split(tidy_data , tidy_data$strategy_split)
+sList_HD <- tidy_data %>% mutate(initial_bg_density = "HD") %>% split(. , .$strategy_split)
+sList_VHD <- tidy_data %>% mutate(initial_bg_density = "VD") %>% split(. , .$strategy_split)
+
 
 saveRDS(sList , "data/all_sim_strats_updated.rds")
+saveRDS(sList_HD , "data/all_sim_strats_HD.rds")
+saveRDS(sList_VHD , "data/all_sim_strats_VHD.rds")
 
 
