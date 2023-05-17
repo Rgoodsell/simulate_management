@@ -2,29 +2,38 @@ library(tidyverse)
 library(ggplot2)
 library(ggpubr)
 library(mgcv)
-
-source("imputation_helpers.R")
-
-
+library(patchwork)
 
 # data --------------------------------------------------------------------
 
 
-
-modsAll <- readRDS("data/H_saturated_core_comp_nostrat_RES_MODS")
-thin <- seq(10 , 300 , by = 3)
+modsAll <- readRDS("data/alexa_regularised_cropping_nostrat_RES.rds_MODS")
+dataAll <- readRDS("data/alexa_regularised_cropping_nostrat_RES.rds_DATA")
+thin <- seq(10 , 120 , by = 3)
 mods <- modsAll$modimp[thin]
 
-# summarise ---------------------------------------------------------------
+# simulate ----------------------------------------------------------------
 
-simCoefs <- lapply(mods , function(x) gam.mh(x , ns = 1000 , thin = 2))
-saveRDS(simCoefs , "data/simulated_coeffs.rds")
-simCoefs <- readRDS("data/simulated_coeffs.rds")
+simCoefs <- lapply(mods , function(x) gam.mh(x , ns = 100 , thin = 1))
+saveRDS(simCoefs , "data/simulated_slim_coeffs.rds")
 
-coefs    <- lapply(1:length(simCoefs) , function(x) data.frame(simCoefs[[x]]$bs , check.names = FALSE)) %>% 
-  bind_rows(.id = "imp") %>% pivot_longer(-imp , names_to = "coef")
+# plot --------------------------------------------------------------------
+
+simCoefs <- readRDS("data/simulated_slim_coeffs.rds")
+
+coefs    <- lapply(1:length(simCoefs) , function(x) data.frame(simCoefs[[x]]$bs , check.names = FALSE)) %>% bind_rows(.id = "imp")
+
+# set levels for regularised cropping coefficients to rename later
+crop_t1_levels  <- levels(dataAll$all_data[[1]]$crop_t1)
+crop_t2_levels  <- levels(dataAll$all_data[[1]]$crop_t2)
+rotation_levels <- levels(dataAll$all_data[[1]]$rotation)
+
+names(coefs)[str_detect(names(coefs) , "crop_t1")] <- paste0(crop_t1_levels , "_crop_t1")
+names(coefs)[str_detect(names(coefs) , "crop_t2")] <- paste0(crop_t2_levels , "_crop_t2")
+names(coefs)[str_detect(names(coefs) , "rotation")] <- paste0(rotation_levels , "_rotation")
 
 
+coefs <- coefs %>% pivot_longer(-imp , names_to = "coef")
 
 coef_sum <- coefs %>%  bind_rows( .id = "iter") %>% 
   filter(!str_detect(coef , "accept")) %>% 
@@ -41,16 +50,16 @@ coef_sum <- coefs %>%  bind_rows( .id = "iter") %>%
                           str_detect(coef , "hBC|gly|gw|mort") ~ "Herbicide" , 
                           str_detect(coef , "soil|pc") ~ "Soil" , 
                           str_detect(coef , "transition_year") ~ "Year", 
-                          str_detect(coef , "rotation|crop") ~ "Rotation")) %>% 
+                          str_detect(coef , "rotation") ~ "Rotation",
+                          str_detect(coef , "crop_t1") ~ "Crop_t1",
+                          str_detect(coef , "crop_t2") ~ "Crop_t2")) %>% 
   mutate(coef = str_remove_all(coef , ".x|factor|\\(|\\)|cult_cat.x|bs\\.|\\.")) 
 
 
 coef_sum$type <- factor(coef_sum$type, 
                         levels = factor(c("Intercept" , "Density" , "Year" , 
                                           "Cultivation" , "Herbicide","Timing",
-                                          "Soil"  , "Rotation")))
-
-unique(coef_sum$coef)
+                                          "Soil"  , "Rotation" , "Crop_t1" , "Crop_t2")))
 
 # pretty coef names
 coef_tidy <- coef_sum %>% mutate(
@@ -80,10 +89,8 @@ coef_tidy <- coef_sum %>% mutate(
 
 # plot --------------------------------------------------------------------
 
-
-
 pm <- coef_tidy %>%   
-  filter(!str_detect(coef , "rotation|FF")) %>% 
+  filter(!str_detect(coef , "crop|FF|rotation")) %>% 
   mutate(coef = str_remove(coef , "^bs\\.")) %>% 
   ggplot(aes(coef , value_m))+
   geom_errorbar(aes(ymin = upr90 , ymax = lwr90), width = 0)+
@@ -94,17 +101,13 @@ pm <- coef_tidy %>%
   geom_hline(yintercept = 0  , lty = 3)+
   geom_point(size = 2 , pch=21 ,  fill = "black")+
   geom_point(size = 1 , pch=21 , fill = "white")+
-  facet_wrap(~type , scale = "free" , nrow = 2 , ncol=4)+
+  facet_wrap(~type , scale = "free",ncol=1)+
   coord_flip()
 
-
-pm
-
 pr <- coef_tidy %>%   
-  filter(str_detect(coef , "rotation")) %>% 
-  mutate(coef = str_remove_all(coef , "^bs\\.|rotation")) %>% 
-  mutate(coef = str_replace_all(coef , "_" , "\n -> \n")) %>% 
-  ggplot(aes(reorder(coef, -value_m) , value_m))+
+  filter(str_detect(coef , "crop|rotation")) %>% 
+  mutate(coef = str_remove_all(coef , "_rotation|_t1|_t2|_crop")) %>% 
+  ggplot(aes(coef , value_m))+
   geom_errorbar(aes(ymin = upr90 , ymax = lwr90), width = 0)+
   geom_errorbar(aes(ymin = upr50 , ymax = lwr50), width = 0 , lwd=1.5)+
   theme_classic()+
@@ -113,29 +116,15 @@ pr <- coef_tidy %>%
   geom_point(size = 2 , pch=21 ,  fill = "black")+
   geom_point(size = 1 , pch=21 , fill = "white")+
   facet_wrap(~type , scale = "free_x" , nrow = 2)+
-  theme(strip.background = element_blank())
+  theme(strip.background = element_blank())+
+  facet_wrap(~type , scales = "free")+
+  coord_flip()
+
+#plot 
+pm 
+
+dev.new()
+pr
 
 
-library(patchwork)
-tiff(filename="figures/fig2a.tif",height=4600,width=6200,units="px",res=800,compression="lzw", type="cairo")  
-pm / pr
-dev.off()
 
-
-tiff(filename="figures/figS2.tif",height=4600,width=6200,units="px",res=800,compression="lzw", type="cairo")  
-
-pf <- coef_tidy %>%   
-  filter(str_detect(coef , "FF")) %>% 
-  mutate(coef = str_remove_all(coef , "^bs\\.|sFF")) %>% 
-  ggplot(aes(reorder(coef , -value_m) , value_m))+
-  geom_errorbar(aes(ymin = upr90 , ymax = lwr90), width = 0)+
-  geom_errorbar(aes(ymin = upr50 , ymax = lwr50), width = 0 , lwd=1.5)+
-  theme_classic()+
-  theme(strip.background = element_blank(),
-        axis.text.x = element_blank())+
-  labs(y = "Value" , x = "Field ID")+
-  geom_hline(yintercept = 0  , lty = 3)+
-  geom_point(size = 2 , pch=21 ,  fill = "black")+
-  geom_point(size = 1 , pch=21 , fill = "white")
-
-dev.off()
