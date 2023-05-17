@@ -13,19 +13,22 @@ unpack_parList <- function(parList){
       # Constant variables
       dens_t1         = factor(1:5),
       
-      crop_t1        = parList$rotation[i],
-      crop_t2        = parList$rotation[i+1],
+      crop_t1        = parList$cropping[i],
+      crop_t2        = parList$cropping[i+1],
+      rotation       = parList$rotation[i],
       
       
       cult_cat_t2     = parList$cultivation[i],
-      soil_group_t1   = parList$soil[i],
+      soil_group_t1   = parList$soil_group[i],
       
-      gw_spec_t2      = parList$nGWS[i],
-      a_gly_t2        = parList$aGly[i],
+      spray_days_gw_t2 = parList$spray_days[i+1],
+      a_gly_t2        = parList$n_glyphosate[i+1],
       
-      d_season_t2     = parList$d_season[i],
-      d_diff_t2       = parList$d_diff[i],
-      c_diff_t2       = parList$c_diff[i],
+      d_season_t2     = parList$d_season[i+1],
+      d_diff_t2       = parList$d_diff[i+1],
+      c_diff_t2       = parList$c_diff[i+1],
+      
+      mean_mort_t1    = parList$mean_mort[i],
       
       transition_year = "2015_2016",
       
@@ -38,30 +41,32 @@ unpack_parList <- function(parList){
   return(datList)
   
 }              # function to unpack parList into chunks of new data
-unpack_impMod  <- function(impRes, nMod, thin){
-  # impRes = imputation results
-  # nMod   = range of models to take from results 
+unpack_impMod  <- function(impRes , impData , thin){
+  # impRes = imputation models
+  # impData = imputation data
+  # thin = sequence to thin by
+  
+  mods <- impRes$modimp[thin]
+  data <- impData$all_data[thin]
   
   outList <- list()
-  modInd  <- seq(nMod[1] , nMod[2] , by = thin)
-  for(i in seq_along(modInd)){
+  for(i in seq_along(mods)){
     
-    k <- modInd[i]
-    modObj <- impRes$modimp[[k]]     # Models
-    modDat <- impRes$all_data[[k]]   # Data fit to model
+    modObj <-mods[[i]]     # Models
+    modDat <- data[[i]]   # Data fit to model
     
     # Scale predictors
-    toScale   <- modDat %>% select(matches("gly_t2|diff_t2|gw_spec_t2")) %>% colnames()
+    toScale   <- modDat %>% select(matches("gly_t2|diff_t2|spray_days_gw_t2|mort_t1|^S[0-9]_t1")) %>% colnames()
     scaleAttr <- attributes(scale(modDat[toScale] , scale = TRUE , center = TRUE)) 
     
     outList[[i]] <- list(modObj  = modObj , scaleAttr = scaleAttr)
     
-    
   }
   
   return(outList)
-  
-} # function to extract models & data scaling attributes 
+}
+
+# function to extract models & data scaling attributes 
 construct_Tf   <- function(modList, parList){
   # fitList = # list containing
   # - $modObj    = model fit to data
@@ -79,7 +84,7 @@ construct_Tf   <- function(modList, parList){
   for(i in seq_along(transition_list)){
     
     td      <- transition_list[[i]]    # Get step i
-    fields  <- unique(modObj$model$FF)[1] %>% droplevels() # Get all fields
+    fields  <- unique(modObj$model$FF)[1] %>% droplevels() # Get field 
     newData <- expand_grid(td,fields) %>% mutate(FF = fields) # Expand data
     newData[scaleAttr$dimnames[[2]]] <- scale(newData[scaleAttr$dimnames[[2]]], scaleAttr$`scaled:center`, scaleAttr$`scaled:scale`) # scale to same attributes as fitted data
     
@@ -143,36 +148,47 @@ project_sim    <- function(projection_list , Nt){
   out   <- bind_rows(res_list , .id = "iter")  
   
 } # project entire simulation from starting state Nt 
-simulate_strategy <- function(parList  , impRes , nMod , thin){
+simulate_strategy <- function(parList  , impRes , impData ,  thin){
   simList <- list()
   for(i in seq_along(parList)){
     print(i)
     Nt <- parList[[i]]$Nt
-    resList     <- unpack_impMod(impRes , nMod , thin)
+    resList     <- unpack_impMod(impRes = impRes, impData = impData ,  thin = thin)
     tf_matrices <- lapply(resList ,construct_Tf, parList[[i]])
-    simList[[i]]     <- lapply(tf_matrices ,project_sim, Nt) %>%
+    simList[[i]]     <- lapply(tf_matrices , project_sim , Nt) %>%
       bind_rows(.id = "imp") %>% mutate(imp = as.numeric(imp) , strategy = parList[[i]]$strategy)
   }
   
   return(simList)
 }
-build_strategy    <- function(rotation = c("wheat_wheat" ,"wheat_wheat") , d_season = "winter",soil = "S5",cultivation = "conventional",nHerb = 0 , nGWS = 0 , aGLY = 0 , c_diff = 0 , d_diff = 0, nstep = 3 , name){
+
+build_strategy    <- function(cropping     = c("wheat"),
+                              rotation     = c("wheat_wheat") , 
+                              d_season     = "winter" ,
+                              soil_group   = "S5" ,
+                              cultivation  = "conventional" ,
+                              spray_days   = 0 , 
+                              n_glyphosate = 0 , 
+                              mean_mort    = 100 , 
+                              c_diff       = 0 , 
+                              d_diff       = 0 ,
+                              nstep        = 3 , 
+                              name){
   list(
+    cropping     = cropping,
     rotation     = rotation,
     d_season     = d_season,
-    soil         = soil,
+    soil_group   = soil_group,
     cultivation  = cultivation,
-    nHerb        = nHerb,
-    nGWS         = nGWS ,
-    aGly         = aGLY ,
+    spray_days   = spray_days,
+    n_glyphosate = n_glyphosate ,
+    mean_mort    = mean_mort,
     c_diff       = c_diff,
     d_diff       = d_diff ,
-    strategy         = name)
+    strategy     = name)
   
   
 }
-
-
 
 # functions using resimulted coefficients ---------------------------------
 
@@ -212,14 +228,14 @@ construct_Tf_rs      <- function(modList , Beta , parList){
     eta   <- sapply(1:5 , function(x) Beta %*% X[x,])  # Linear predictor for resim coefficients - row = coef vector , col = source state / new data
     
     
-    thetaL <- array(dim = c(nrow(eta) , 5,5))  # Array of transition probabilities , row = coef vector , col = destination state , slice = destination state
+    thetaL <- array(dim = c(nrow(eta) , 5,5))  # Array of transition probabilities , row = coef vector , col = destination state , slice = source state
     for(j in 1:5){
       theta <- matrix(0 , ncol = 5 , nrow = nrow(Beta))
-      theta[,1] <- 1- plogis(eta[,i] - cp[1]) 
+      theta[,1] <- 1- plogis(eta[,j] - cp[1]) 
       for(k in 2:4){
-        theta[,k] <- plogis(eta[,i] - cp[k-1]) - plogis(eta[,i] - cp[k])
+        theta[,k] <- plogis(eta[,j] - cp[k-1]) - plogis(eta[,j] - cp[k])
       }
-      theta[,5] <- plogis(eta[,i] - cp[4]) 
+      theta[,5] <- plogis(eta[,j] - cp[4]) 
       thetaL[,,j] <- theta
     }
     
@@ -257,12 +273,12 @@ project_sim_rs       <- function(projection_list , Nt){
   out   <- bind_rows(res_list , .id = "iter")  
   
 } # project entire simulation from starting state Nt 
-simulate_strategy_rs <- function(parList_comp  , impRes , betaList ,  nMod , thin , Nt){
+simulate_strategy_rs <- function(parList_comp  , impRes , impData ,  betaList ,   thin , Nt){
   simList <- list()
   
   for(i in seq_along(parList_comp)){
     print(noquote(paste("Simulating strategy" , i , " of " , length(parList_comp),"...")))
-    resList     <- unpack_impMod(impRes , nMod , thin)
+    resList     <- unpack_impMod(impRes = impRes, impData = impData ,  thin = thin)
     tf_matrices <- mapply(construct_Tf_rs , modList = resList , Beta = betaList , parList = list(parList_comp[[i]]) , SIMPLIFY = FALSE)
     simList[[i]]     <- lapply(tf_matrices ,project_sim_rs, Nt) %>%
       bind_rows(.id = "imp") %>%
